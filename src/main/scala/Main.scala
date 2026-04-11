@@ -3,8 +3,8 @@ import mohs.{Mohs, MohsInt, Windows, prettyPrint}
 import mohs.given
 // import mohs.MohsNumericOps.*
 
-given Conversion[Int, Mohs[Int]] = MohsInt(_)
-given Conversion[String, Mohs[Char]] = x => mohs.StringArray(Array(x.length),x)
+// given Conversion[Int, Mohs[Int]] = MohsInt(_)
+// given Conversion[String, Mohs[Char]] = x => mohs.StringArray(Array(x.length),x)
 
 
 
@@ -22,7 +22,15 @@ given Conversion[String, Mohs[Char]] = x => mohs.StringArray(Array(x.length),x)
   val array5 = Mohs.String("mississippi")
   val array6 = Mohs.List(1, 2, 3)
   val array3d = Mohs.List(1, 2, 3, 0, 5, 9, 3, 7).reshape(2,3,5)
-  
+
+  val matA = Mohs.List(1, 2, 3, 4, 5, 6, 7, 8, 9, 0).reshape(5, 2);
+  val matB = Mohs.List(1, 2, 3, 4, 5, 6, 7, 8, 9).reshape(3, 2);
+  // val matB = Mohs.List(9, 8, 7, 6, 5, 4, 3, 2, 1).reshape(3,2);
+
+  // prettyPrint(matB.tile(5))
+  // prettyPrint(matA.axis(1).tile(3))
+
+    
   // prettyPrint(Mohs.concat(2)(List(
   //   Mohs.List(1, 2, 3, 10, 10, 20, 30, 100).reshape(2,4),
   //   Mohs.List(4, 5, 6, 20).reshape(2,2),
@@ -32,9 +40,6 @@ given Conversion[String, Mohs[Char]] = x => mohs.StringArray(Array(x.length),x)
   // prettyPrint(
   //   "aaaabbbbcccc111122223333".reshape(2,3,4).reorderAxis(1,0,2)
   // )
-
-  prettyPrint(array3d)
-  prettyPrint(array3d.windows(2, 2))
 
   // prettyPrint(array3d.axis(3)(Array(true, false, true, true)))
 

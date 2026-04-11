@@ -10,6 +10,9 @@ lazy val root = project
 
     libraryDependencies += "org.typelevel" %% "cats-core" % "2.13.0",
 
-    libraryDependencies += "org.scalameta" %% "munit" % "1.0.0"
+    libraryDependencies += "org.scalameta" %% "munit" % "1.0.0",
+
+    libraryDependencies += "org.scalanlp" %% "breeze" % "2.1.0"
+
    
   )

@@ -2,6 +2,8 @@ package mohs
 
 import scala.reflect.ClassTag
 
+val df = java.text.DecimalFormat("0.##", java.text.DecimalFormatSymbols(java.util.Locale.US))
+
 private def joinStringLines(s1: String, s2: String) =
   val l1 = s1.linesIterator.map(_.length).max
   val l2 = s2.linesIterator.map(_.length).max
@@ -23,6 +25,7 @@ def spacedCells(shape: Array[Int], cells: Iterator[String]) =
 
 def display[A:ClassTag](value: Mohs[A]): String = implicitly[ClassTag[A]] match {
   case ClassTag.Boolean => value.shape.mkString("("," ",")") + value.values.map{j => if j.asInstanceOf[Boolean] then '1' else '0'}.mkString("[", " ", "]")
+  case ClassTag.Double => value.shape.mkString("("," ",")") + value.values.map(d => df.format(d)).mkString("[",", ","]")
   case ClassTag.Char => value.shape.mkString("("," ",")") + value.values.mkString("\"", "", "\"")
   case _ => value.shape.mkString("("," ",")") + value.values.mkString("[",", ","]")
 }
@@ -44,9 +47,9 @@ def displayRankGreater2[A: ClassTag](value: Mohs[A]): String = implicitly[ClassT
   case ClassTag.Char => value.shape.mkString("("," ",")") + value.cells(value.rank-2).map { i =>
     i.values.mkString
   }.mkString("\n\"", "\n ", "\"\n")
-  case ClassTag.Boolean => value.shape.mkString("("," ",")") + value.cells(value.rank-2).map { i =>
+  case ClassTag.Boolean => value.shape.mkString("("," ",")\n") + spacedCells(value.shape, value.cells(value.rank-1).map { i =>
     i.values.map{j => if j.asInstanceOf[Boolean] then '1' else '0'}.mkString(" ")
-  }.mkString("\n[", "\n ", "]")
+  })
   case _ => value.shape.mkString("("," ",")\n") + spacedCells(value.shape, value.cells(value.rank-1).map { i =>
     i.values.mkString("",", ","")
   })

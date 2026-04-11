@@ -6,40 +6,10 @@ import scala.specialized
 import scala.reflect.ClassTag
 import scala.collection.mutable
 
-def windowsData(window: Array[Int], shape: Array[Int]): (Array[Int], Array[Int], Array[Int], Array[Int]) =
-  val span = shape.reverse.zipAll(window.reverse, 0, 1).map(_-_+1).reverse
-  
+def windowsData(window: Array[Int], shape: Array[Int]): Array[Int] =
   val outShape = shape.zip(window).map(_-_+1) ++ window ++ shape.drop(window.length)
-  
-  // val span = shape.zipAll(window, 0, 1).map(_-_+1)
-  val strides = shape.indices.map { i => shape.drop(i + 1).product }
-
-  val indexes = (0 until window.product).map { i =>
-    var r = 0
-    var k = i
-    var s = 0
-    while s < window.length do
-      
-      val j = window(s)
-      r += (if j == 0 then k else k % j)*strides(s)
-      k = if j == 0 then 0 else k / j
-      s += 1
-    r
-  }
-
-  val bases = (0 until span.product).map { i =>
-    var r = 0
-    var k = i
-    var s = span.length
-    while s > 0 do
-      s -= 1
-      val j = span(s)
-      r += (if j == 0 then k else k % j)*strides(s)
-      k = if j == 0 then 0 else k / j
-    r
-  }
-
-  return (outShape, span, indexes.toArray, bases.toArray)
+  require(outShape.forall(_>=0), "Invalid window size")
+  return outShape
 
 trait Mohs[@specialized(Int, Double, Float, Long, Char, Boolean) T:ClassTag]:
   val shape: Array[Int]
@@ -61,12 +31,34 @@ trait Mohs[@specialized(Int, Double, Float, Long, Char, Boolean) T:ClassTag]:
 
   /* === AXIS METHODS === */
 
+  infix def ~(x: Int): MohsRanked[T] = axis(x)
+
   def axis(x: Int): MohsRanked[T] = 
-    require(x <= rank && x > 0, "Invalid axis")
+    // require(x <= rank && x > 0, "Invalid axis")
     MohsRankedView(this, x)
+
+  def tile(n: Int): Mohs[T] = 
+    val count = shape.product
+    val data = Stream.continually(values.toStream).flatten.take(count*n).toArray
+    BaseArray(shape.prepended(n), data)
 
   def repeat(n: Int): Mohs[T] = this.axis(1).repeat(n)
   def repeat(n: Int*): Mohs[T] = this.axis(1).repeat(n*)
+
+  def take(n: Int*): Mohs[T] =
+    require(n.length <= rank)
+    var result = this
+    for (k, i) <- n.zipWithIndex do
+      result = result.axis(i+1).take(k)
+    result
+
+  def drop(n: Int*): Mohs[T] =
+    require(n.length <= rank)
+    var result = this
+    for (k, i) <- n.zipWithIndex do
+      result = result.axis(i+1).drop(k)
+    result
+
 
   def take(n: Int): Mohs[T] = this.axis(1).take(n)
   def drop(n: Int): Mohs[T] = this.axis(1).drop(n)
@@ -87,7 +79,7 @@ trait Mohs[@specialized(Int, Double, Float, Long, Char, Boolean) T:ClassTag]:
   
   def reshape(sh: Int*): Mohs[T] = reshape(sh.toArray)
 
-  def ravel(): Mohs[T] =
+  def ravel: Mohs[T] =
     BaseArray(Array(shape.product), values)
 
   /**
@@ -124,17 +116,15 @@ trait Mohs[@specialized(Int, Double, Float, Long, Char, Boolean) T:ClassTag]:
     require(window.length<=this.rank, "window rank must be less or equal array rank")
     Windows(window.toArray, this)
 
-  // def find(pattern: Mohs[T]): Mohs[Boolean] =
-  //   require(pattern.rank<=this.rank, "pattern rank must be less or equal array rank")
-  //   val (span, indexes_, bases_) = windowsData(pattern.shape, this.shape)
-
-  //   val patternVal = pattern.values
-
-  //   val data = (for i <- bases_ yield 
-  //     (for j <- indexes_ yield this.flat_(i+j)).zip(patternVal).forall(_ == _)
-  //   )
-
-  //   BaseArray(span, data)
+  def find(pattern: Mohs[T]): Mohs[Boolean] =
+    require(pattern.shape.length<=this.rank, "pattern rank must be less or equal array rank")
+    val windowShape = pattern.shape.reverse.padTo(rank, 1).reverse
+    val patternValues = pattern.values
+    val w = windows(windowShape)
+    val data = w.cells(rank).map {
+      _.values.sameElements(patternValues)
+    }
+    BaseArray(w.shape.take(rank), data.toArray)
 
   def find(x: T): Mohs[Boolean] =
     val data = values.map { y => x == y }
@@ -143,27 +133,21 @@ trait Mohs[@specialized(Int, Double, Float, Long, Char, Boolean) T:ClassTag]:
   
 
   def cells(n: Int): Iterator[Mohs[T]] =
-    val newShape = shape.drop(n)
-    val stride = newShape.product
-    val cells = for 
-      i <- (0 until shape.take(n).product).iterator
-    yield
-      val data = (0 until stride).map(j => flat_(j+i*stride))
-      BaseArray(newShape, data.toArray)
-    cells
+    val count = shape.take(n).product
+    Iterator.tabulate(count)(CellView(this, n, _))
 
   def zip[U](that: Mohs[U]): Mohs[(T,U)] = Zip(this, that)
+  def zipWithIndex[U]: Mohs[(T,Mohs[Int])] = Zip(this, Indexes(shape))
   def map[U:ClassTag](fn: (T) => U): Mohs[U] = new Map(this, fn)
-  // def map[X,Y,Z](fn: (X, Y) => Z)(implicit ev: T =:= (X,Y)): Mohs[Z] = new Map(this, (t: T) => fn(t._1, t._2))
   
-  def reduce(fn: (T, T) => T): Mohs[T] =
-    val originalData = this.values
-    val stride = this.shape.last
-    val shape = this.shape.init
-    val data = for 
-      i <- 0 until shape.product
-    yield originalData.slice(i*stride, i*stride+stride).reduceLeft(fn)
-    BaseArray(shape, data.toArray)
+  def reduce(fn: (T, T) => T): T =
+    require(rank == 1, "Invalid rank")
+    values.reduce(fn)
+
+  def scan(z: T)(fn: (T, T) => T): Mohs[T] =
+    require(rank == 1, "Invalid rank")
+    val data = values.scan(z)(fn)
+    BaseArray(Array(length+1), data)
 
   infix def table[U](that: Mohs[U]): Mohs[(T, U)] =
     val shape = this.shape concat that.shape
@@ -184,11 +168,7 @@ trait Mohs[@specialized(Int, Double, Float, Long, Char, Boolean) T:ClassTag]:
 
   def ==(that: Mohs[T]): Mohs[Boolean] = zip(that).map(_ == _)
   def ==(that: T): Mohs[Boolean] = map(_ == that)
-  def >(that: Mohs[T])(implicit num: Ordering[T]): Mohs[Boolean] = zip(that).map(num.gt)
-  def <(that: Mohs[T])(implicit num: Ordering[T]): Mohs[Boolean] = zip(that).map(num.lt)
-  def >=(that: Mohs[T])(implicit num: Ordering[T]): Mohs[Boolean] = zip(that).map(num.gteq)
-  def <=(that: Mohs[T])(implicit num: Ordering[T]): Mohs[Boolean] = zip(that).map(num.lteq)
-
+  
   def equals(that: Mohs[T]): Boolean = 
     if !that.shape.zip(this.shape).forall(_.equals(_)) then return false
     return that.values.zip(this.values).forall(_.equals(_))
@@ -208,27 +188,28 @@ trait Mohs[@specialized(Int, Double, Float, Long, Char, Boolean) T:ClassTag]:
     this.indexes.values.zip(this.values).flatMap { 
       case (_, false) => None
       case (_, 0) => None
+      case (_, 0.0) => None
       case (_, "") => None
       case (index, _) => Some(index)
     }
 
 
   def ++(that: Mohs[T]) =
-    if rank == that.rank then
-      require(this.shape.tail sameElements that.shape.tail, "Major cells must have the same shape")
-      val data = this.values ++ that.values
-      BaseArray(this.shape.tail.prepended(length+that.length), data)
-    else if rank - that.rank == 1 then
-      require(this.shape.tail sameElements that.shape, "Major cells must have the same shape")
-      val data = this.values ++ that.values
-      BaseArray(this.shape.tail.prepended(length+1), data)
-    else if rank - that.rank == -1 then
-      require(this.shape sameElements that.shape.tail, "Major cells must have the same shape")
-      val data = this.values ++ that.values
-      BaseArray(that.shape.tail.prepended(that.length+1), data)
-    else
-      throw IllegalArgumentException("Ranks of arrays must be the same or one apart")
+    val len = this.rank - that.rank match
+      case 0 => 
+        require(this.shape.tail sameElements that.shape.tail, "Major cells must have the same shape")
+        length+that.length
+      case 1 =>
+        require(this.shape.tail sameElements that.shape, "Major cells must have the same shape")
+        length+1
+      case -1 =>
+        require(this.shape sameElements that.shape.tail, "Major cells must have the same shape")
+        that.length+1
+      case _ => 
+        throw IllegalArgumentException("Ranks of arrays must be the same or one apart")
 
+    BaseArray(this.shape.updated(0, len), this.values ++ that.values)
+  
   def ++(that: T) =
     if rank == 1 then
       val data = this.values.appended(that)
@@ -237,27 +218,81 @@ trait Mohs[@specialized(Int, Double, Float, Long, Char, Boolean) T:ClassTag]:
       throw IllegalArgumentException("Ranks of arrays must be the same or one apart")
     
 
-  def apply(mask: Mohs[Boolean]) = 
+  @targetName("apply_bool") def apply(mask: Mohs[Boolean]) = 
     val cells = this.cells(mask.rank)
     Mohs.merge(mask.values.zip(cells).filter(_._1).map(_._2))
 
-  def apply(x: Mohs[Int]) = 
+  @targetName("apply_int") def apply(x: Mohs[Int]) = 
     val cells = this.cells(1).toArray
-    val data = x.values.map { i =>
-      cells(i)
-    }
+    val data = x.values.flatMap(cells(_).values).toArray
     val shape = x.shape ++ this.shape.drop(1)
-    Mohs.merge(data).reshape(shape)
+    BaseArray(shape, data)
 
   def apply(x: Iterable[Int]) = 
     val cells = this.cells(1).toArray
-    val data = x.map { i =>
-      cells(i)
-    }
+    val data = x.flatMap(cells(_).values).toArray
     val shape = this.shape.updated(0, x.size)
-    Mohs.merge(data.toSeq).reshape(shape)
+    BaseArray(shape, data)
+
+  def collect[V:ClassTag](pf: PartialFunction[T,V]): Mohs[V] =
+    val cells = values.collect(pf)
+    BaseArray(Array(cells.length), cells.toArray)
 
   override def toString(): String = display[T](this)
+
+
+
+  def >(that: Mohs[T])(implicit num: Ordering[T]): Mohs[Boolean] = zip(that).map(num.gt)
+  def <(that: Mohs[T])(implicit num: Ordering[T]): Mohs[Boolean] = zip(that).map(num.lt)
+  def >=(that: Mohs[T])(implicit num: Ordering[T]): Mohs[Boolean] = zip(that).map(num.gteq)
+  def <=(that: Mohs[T])(implicit num: Ordering[T]): Mohs[Boolean] = zip(that).map(num.lteq)
+  def >(that: T)(implicit num: Ordering[T]): Mohs[Boolean] = map(num.gt(_,that))
+  def <(that: T)(implicit num: Ordering[T]): Mohs[Boolean] = map(num.lt(_,that))
+  def >=(that: T)(implicit num: Ordering[T]): Mohs[Boolean] = map(num.gteq(_,that))
+  def <=(that: T)(implicit num: Ordering[T]): Mohs[Boolean] = map(num.lteq(_,that))
+
+
+  def binop(fn: (T,T) => T)(that: Mohs[T]) = zip(that).map(fn.tupled)
+  def binopScalar(fn: (T,T) => T)(that: T) = map(fn(_, that))
+
+  def +(that: Mohs[T])(implicit num: Numeric[T]): Mohs[T] = binop(num.plus)(that)
+  def -(that: Mohs[T])(implicit num: Numeric[T]): Mohs[T] = binop(num.minus)(that)
+  def *(that: Mohs[T])(implicit num: Numeric[T]): Mohs[T] = binop(num.times)(that)
+  def /(that: Mohs[T])(implicit num: Numeric[T]): Mohs[Double] = zip(that).map(num.toDouble(_:T)/num.toDouble(_:T))
+  def **(that: Mohs[T])(implicit num: Numeric[T]): Mohs[Double] = 
+    zip(that).map((a,b) => scala.math.pow(num.toDouble(a), num.toDouble(b)))
+  def %(that: Mohs[T])(implicit num: Numeric[T]): Mohs[Int] = zip(that).map(num.toInt(_:T)%num.toInt(_:T))
+  infix def maximum(that: Mohs[T])(implicit num: Numeric[T]): Mohs[T] = binop(num.max)(that)
+  infix def minimum(that: Mohs[T])(implicit num: Numeric[T]): Mohs[T] = binop(num.min)(that)
+
+  def +(that: T)(implicit num: Numeric[T]): Mohs[T] = binopScalar(num.plus)(that)
+  def -(that: T)(implicit num: Numeric[T]): Mohs[T] = binopScalar(num.minus)(that)
+  def *(that: T)(implicit num: Numeric[T]): Mohs[T] = binopScalar(num.times)(that)
+  def /(that: T)(implicit num: Numeric[T]): Mohs[Double] = map(num.toDouble(_:T)/num.toDouble(that))
+  def **(that: T)(implicit num: Numeric[T]): Mohs[Double] = 
+    map(a => scala.math.pow(num.toDouble(a), num.toDouble(that)))
+  def %(that: T)(implicit num: Numeric[T]): Mohs[Int] = map(num.toInt(_:T)%num.toInt(that))
+  infix def maximum(that: T)(implicit num: Numeric[T]): Mohs[T] = binopScalar(num.max)(that)
+  infix def minimum(that: T)(implicit num: Numeric[T]): Mohs[T] = binopScalar(num.min)(that)
+
+  def unary_-(implicit num: Numeric[T]): Mohs[T] = UFunc.neg(this)
+  def abs(implicit num: Numeric[T]): Mohs[T] = UFunc.abs(this)
+  def sign(implicit num: Numeric[T]): Mohs[T] = UFunc.sign(this)
+
+  def sum(implicit num: Numeric[T]) = UFunc.sum(this)
+  def max(implicit num: Numeric[T]) = UFunc.max(this)
+  def min(implicit num: Numeric[T]) = UFunc.min(this)
+  def argmin(implicit num: Numeric[T]) = UFunc.argmin(this)
+  def argmax(implicit num: Numeric[T]) = UFunc.argmax(this)
+
+  def sum(axis: Int)(implicit num: Numeric[T]) = UFunc.sum(this.axis(axis))
+  def max(axis: Int)(implicit num: Numeric[T]) = UFunc.max(this.axis(axis))
+  def min(axis: Int)(implicit num: Numeric[T]) = UFunc.min(this.axis(axis))
+  def mean(axis: Int)(implicit num: Numeric[T]) = UFunc.mean(this.axis(axis))
+  def argmin(axis: Int)(implicit num: Numeric[T]) = UFunc.argmin(this.axis(axis))
+  def argmax(axis: Int)(implicit num: Numeric[T]) = UFunc.argmax(this.axis(axis))
+  
+
 
 object Mohs extends MohsNumericOps:
   // @targetName("list_i") def List[T](s: Int*): Mohs[Int] = BaseArray(Array(s.length), s.toList)
@@ -269,12 +304,15 @@ object Mohs extends MohsNumericOps:
   @targetName("list_gen") def List[T:ClassTag](s: T*): Mohs[T] = BaseArray(Array(s.length), s.toArray)
   @targetName("list_iter") def List[T:ClassTag](s: Iterable[T]) = BaseArray(Array(s.size), s.toArray)
   
+  def apply[T:ClassTag](sh: Array[Int], data: Array[T]): Mohs[T] =
+    BaseArray(sh, data)
+
   def FromFn[T:ClassTag](s: (Mohs[Int] => T), shape: Array[Int]) =
     Indexes(shape).map(s)
 
   def String(s: String) = StringArray(Array(s.length), s)
   
-  def Fill[@specialized(Int, Double, Float, Long) T:ClassTag](fill: T)(sh: Int*) = 
+  def Fill[@specialized(Int, Double, Float, Long) T:ClassTag](fill: T)(sh: Int*): Mohs[T] = 
     BaseArray(sh.toArray, Array.fill[T](sh.product)(fill))
 
   def Iota(i: Int) = RangeArray(0, i)
@@ -369,8 +407,18 @@ object Mohs extends MohsNumericOps:
 
     List(array.map(List).toIterable)
 
-  
+  def Random(sh: Int*): Mohs[Double] =
+    val rand = new scala.util.Random
 
+    if (sh.length == 0) return MohsDouble(rand.nextGaussian())
+
+    val data = Array.fill(sh.product)(rand.nextGaussian())
+    BaseArray(sh.toArray, data)
+
+
+  def -[T:ClassTag](tuple: (Mohs[T], Mohs[T]))(implicit num: Numeric[T]): Mohs[T] = 
+    tuple._1.zip(tuple._2).map(num.minus)
+    
 class StringArray(val shape: Array[Int], private val data: String) extends Mohs[Char] {
   def values = data.toCharArray()
 
@@ -379,7 +427,7 @@ class StringArray(val shape: Array[Int], private val data: String) extends Mohs[
 
 class Zip[T,U](private val a: Mohs[T], private val b: Mohs[U]) extends Mohs[(T,U)] {
   val stride = conform(a, b)
-  require(stride != None, "Shapes must match")
+  require(stride != None, f"Shapes must match: (${a.shape.mkString(",")}) zip (${b.shape.mkString(",")})")
 
   val shape = if a.rank > b.rank then a.shape else b.shape
   def values: Array[(T, U)] =
@@ -407,16 +455,29 @@ class Map[T,U:ClassTag](private val a: Mohs[T], private val fn: (T) => U) extend
   def flat_(i: Int) = fn(a.flat_(i))
 }
 
+class Box[T:ClassTag](x: T) extends Mohs[T] {
+  val shape = Array[Int]()
+  def values = Array(x)
+  def flat_(i: Int) = x
+}
+
 class MohsInt(n: Int) extends Mohs[Int] {
   val shape = Array[Int]()
   def values: Array[Int] = Array(n)
   def asInt: Int = n
-
   def flat_(x: Int): Int = n
-  // override def ==(that: Mohs[Int]) = that.map(x => x == n)
+}
+
+class MohsDouble(n: Double) extends Mohs[Double] {
+  val shape = Array[Int]()
+  def values: Array[Double] = Array(n)
+  def asDouble: Double = n
+  def flat_(x: Int): Double = n
 }
 
 class BaseArray[@specialized(Int, Double, Float, Long, Char, Boolean) T:ClassTag](private val sh: Array[Int], private val data: Array[T]) extends Mohs[T] {
+  assert(sh.length == 0 || sh.product == data.length, f"Invalid array: shape (${sh.mkString(",")}) and data size ${data.size} don't match")
+  
   val shape = sh
   def values = data
 
@@ -425,7 +486,7 @@ class BaseArray[@specialized(Int, Double, Float, Long, Char, Boolean) T:ClassTag
 
 class RangeArray(i: Int, j: Int, step: Int=1) extends Mohs[Int] {
   val shape = Array((j-i) / step)
-  def values = (i until j by step).toArray
+  def values = Array.range(i, j, step)
   
   def flat_(k: Int) = i+step*k
 
@@ -434,17 +495,15 @@ class RangeArray(i: Int, j: Int, step: Int=1) extends Mohs[Int] {
 
 class Indexes(private val sh: Array[Int]) extends Mohs[Mohs[Int]] {
   val shape = sh
-  def values = (0 until sh.product).map(represent(sh)).toArray
+  def values = Array.tabulate(shape.product)(represent(sh))
 
   def flat_(x: Int) = represent(sh)(x)
 }
 
 class Windows[T:ClassTag](private val window: Array[Int], private val a: Mohs[T]) extends Mohs[T] {
-  private val (shape_, span_, indexes_, bases_) = windowsData(window, a.shape)
+  private val shape_ = windowsData(window, a.shape)
   val shape = shape_
-  def values = 
-    (for i <- 0 until shape.product yield flat_(i)).toArray
-    //for i <- bases_; j <- indexes_ yield a.flat_(i + j)
+  def values = Array.tabulate(shape.product)(flat_)
 
   def flat_(x: Int): T =
     val l = window.length
@@ -475,6 +534,14 @@ class Windows[T:ClassTag](private val window: Array[Int], private val a: Mohs[T]
     // val index = x / bases_.length
     // a.flat_(bases_(base)+indexes_(index))
 
+}
+
+class CellView[T:ClassTag](private val a: Mohs[T], private val _rank: Int, private val cell: Int) extends Mohs[T] {
+  val shape = a.shape.drop(_rank)
+  val cellOffset = shape.product*cell
+  def values = Array.tabulate(shape.product)(flat_)
+
+  def flat_(x: Int) = a.flat_(cellOffset+x)
 }
 
 def _leadingAxisExtension(s: Array[Int], t: Array[Int]): Option[Int] =

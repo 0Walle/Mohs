@@ -4,32 +4,35 @@ def classify[T](array: Mohs[T]): Mohs[Int] =
   val cells = array.cells(1).toArray
   val data = Array.ofDim[Int](cells.length)
   var counter = 0
-  for (c, i) <- cells.zipWithIndex do
+
+  def lookBack(c: Mohs[T], i: Int): Int =
     var j = i-1
     while j >= 0 do
       if cells(j).equals(c) then
-        data(i) = data(j)
-        j = -2
-      else
-        j -= 1
+        return data(j)
+      j -= 1
 
-    if j == -1 then
-      data(i) = counter
-      counter += 1
+    counter += 1
+    return counter-1
+
+  for (c, i) <- cells.zipWithIndex do
+    data(i) = lookBack(c, i)
   BaseArray(Array(cells.length), data)
 
 def occurrenceCount[T](array: Mohs[T]): Mohs[Int] =
   val cells = array.cells(1).toArray
-  val data = Array.ofDim[Int](cells.length)
-  for (c, i) <- cells.zipWithIndex do
-    var counter = 0
+  val data = Array.ofDim[Int](array.length)
+
+  def countBack(c: Mohs[T], i: Int): Int =
     var j = i-1
     while j >= 0 do
       if cells(j).equals(c) then
-        counter += 1
+        return data(j)+1
       j -= 1
+    return 0
 
-    data(i) = counter
+  for (c, i) <- cells.zipWithIndex do
+    data(i) = countBack(c, i)
   BaseArray(Array(cells.length), data)
 
 def isIn[T](searchFor: Mohs[T], x: Iterable[T]): Mohs[Boolean] =
@@ -42,7 +45,7 @@ def isIn[T](searchFor: Mohs[T], x: Iterable[T]): Mohs[Boolean] =
 def isIn[T](searchFor: Mohs[T], searchIn: Mohs[T]): Mohs[Boolean] =
   val rank = searchFor.rank-searchIn.rank+1
   val searchForCells = searchFor.cells(rank)
-  val searchInCells = searchIn.cells(1)
+  val searchInCells = searchIn.cells(1).toArray
   val data = searchForCells.map { y =>
     searchInCells.exists(z => z.equals(y))
   }
@@ -50,8 +53,8 @@ def isIn[T](searchFor: Mohs[T], searchIn: Mohs[T]): Mohs[Boolean] =
 
 def indexOf[T](searchFor: Mohs[T], searchIn: Mohs[T]): Mohs[Int] =
   val rank = searchFor.rank-searchIn.rank+1
-  val searchForCells = searchFor.cells(rank)
-  val searchInCells = searchIn.cells(1)
+  val searchForCells = searchFor.cells(rank).toArray
+  val searchInCells = searchIn.cells(1).toArray
   val data = searchForCells.map { y =>
     val x = searchInCells.indexWhere(z => z.equals(y))
     if x == -1 then searchInCells.length else x

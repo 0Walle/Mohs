@@ -17,14 +17,13 @@ import java.awt.image.BufferedImage
     val array = Mohs.List[Int](pixels.flatMap(x => Array((x>>16)&0xff, (x>>8)&0xff, (x>>0)&0xff)))
         .reshape(height, width, 3)
 
-    val blurred = array.windows(3,3)
-        .axis(2).flatMap(_.cells(2).reduce(_+_)/9.0)
-        .toInt
+    val blurred = mohs.UFunc.toInt(array.windows(3,3)
+        .axis(2).flatMap(_.cells(2).reduce(_+_)/9))
 
     val outputFile: File = new File("blur.png")
     val outputImage: BufferedImage = new BufferedImage(width-2, height-2, BufferedImage.TYPE_INT_ARGB)
 
-    val outputPixels = blurred.axis(2).flatMap(x => {
+    val outputPixels = blurred.axis(2).map(x => {
         x.zip(Mohs.List(16, 8, 0)).map(_<<_).reduce(_|_)+(255<<24)
     })
 
