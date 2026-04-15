@@ -448,7 +448,7 @@ class KMeansSuit extends munit.FunSuite {
 
     val counts = mask.sum(1) 
 
-    counts / sums
+    sums / counts
 
   test("K-Means") {
     val points = Mohs.Random(100, 2)
